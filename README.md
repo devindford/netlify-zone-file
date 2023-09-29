@@ -14,7 +14,7 @@ Generate a zone file from your Netlify DNS records.
 
 1. Clone this repository:
     ```bash
-    git clone https://github.com/Samyak2/netlify-dns-zone-file.git
+    git clone https://github.com/devindford/netlify-dns-zone-file.git
     ```
 1. Export the netlify token as an environment variable:
     ```bash
