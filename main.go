@@ -6,8 +6,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+
+	"github.com/pelletier/go-toml"
 )
 
 const urlPrefix string = "https://api.netlify.com/api/v1/"
@@ -35,6 +38,28 @@ type DnsRecord struct {
 type NetlifyDnsClient struct {
 	client *http.Client
 	token  string
+}
+
+type Redirect struct {
+	From   string `toml:"from"`
+	To     string `toml:"to"`
+	Status int    `toml:"status"`
+	Force  bool   `toml:"force"`
+}
+
+type NetlifyToml struct {
+	Redirects []Redirect `toml:"redirects"`
+}
+
+func readNetlifyToml(filePath string) (NetlifyToml, error) {
+	var config NetlifyToml
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return config, err
+	}
+
+	err = toml.Unmarshal(content, &config)
+	return config, err
 }
 
 func NewNetlifyDnsClient(token string) NetlifyDnsClient {
@@ -98,21 +123,28 @@ func (n *NetlifyDnsClient) GetAllDnsRecords(zoneId string) ([]DnsRecord, error) 
 	return records, nil
 }
 
-func GenerateZoneFile(zone DnsZone, records []DnsRecord) (string, error) {
+func GenerateZoneFile(zone DnsZone, records []DnsRecord, redirects []Redirect) (string, error) {
 	var zoneFile strings.Builder
 
 	zoneFile.WriteString(fmt.Sprintf("$ORIGIN %s\n", zone.Name+"."))
 
+	// Create a map to track processed record names
+	processedNames := make(map[string]bool)
+
 	for _, record := range records {
-		if record.Type == "NETLIFY" {
-			fmt.Printf("ingoring NETLIFY record: %s\n", record.Hostname)
+		name := record.Hostname + "."
+
+		// Check if this record name has been processed
+		if _, exists := processedNames[name]; exists {
+			fmt.Printf("Ignoring duplicate record name: %s\n", record.Hostname)
 			continue
 		}
 
-		name := record.Hostname + "."
+		// Now mark this record name as processed
+		processedNames[name] = true
 
 		var value string
-		if record.Type == "CNAME" {
+		if record.Type == "CNAME" || record.Type == "NETLIFYv6" || record.Type == "NETLIFY" {
 			value = record.Value + "."
 		} else {
 			value = record.Value
@@ -123,12 +155,20 @@ func GenerateZoneFile(zone DnsZone, records []DnsRecord) (string, error) {
 			priority = fmt.Sprintf("\t%d", record.Priority)
 		}
 
+		for _, redirect := range redirects {
+			if matchRedirectRule(record.Hostname, redirect.From) {
+				value = extractDestination(redirect.To)
+				fmt.Printf("redirect: %s", redirect.To)
+				break
+			}
+		}
+
 		zoneFile.WriteString(
 			fmt.Sprintf(
 				"%s\tIN\t%d\t%s%s\t%s\n",
 				name,
 				record.Ttl,
-				record.Type,
+				typeWithReplacement(record.Type),
 				priority,
 				value,
 			),
@@ -136,6 +176,35 @@ func GenerateZoneFile(zone DnsZone, records []DnsRecord) (string, error) {
 	}
 
 	return zoneFile.String(), nil
+}
+
+func typeWithReplacement(recordType string) string {
+	if recordType == "NETLIFY" || recordType == "NETLIFYv6" {
+		return "CNAME"
+	}
+	return recordType
+}
+
+// Checks if the domain name matches the "from" part of the redirect rule
+func matchRedirectRule(domain, fromRule string) bool {
+	parsedURL, err := url.Parse(fromRule)
+	if err != nil {
+		// Handle error or log it
+		return false
+	}
+	return domain == parsedURL.Host
+}
+
+// Extracts the destination URL from the "to" part of the redirect rule
+// and removes any :splat from the URL since it will be handled at the app level
+func extractDestination(toRule string) string {
+	// Remove :splat or any other placeholder from the URL
+	cleanedURL := strings.ReplaceAll(toRule, ":splat", "")
+
+	// Optionally, you might want to clean up URLs that end with a slash as a result of removing :splat
+	cleanedURL = strings.TrimRight(cleanedURL, "/")
+
+	return cleanedURL
 }
 
 func main() {
@@ -157,7 +226,12 @@ func main() {
 			log.Fatalln(err)
 		}
 
-		zoneContents, err := GenerateZoneFile(zone, records)
+		tomlConfig, err := readNetlifyToml("netlify.toml")
+		if err != nil {
+			log.Fatalf("Failed to read netlify.toml: %v", err)
+		}
+
+		zoneContents, err := GenerateZoneFile(zone, records, tomlConfig.Redirects)
 		if err != nil {
 			log.Fatalln(err)
 		}

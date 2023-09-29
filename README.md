@@ -20,6 +20,8 @@ Generate a zone file from your Netlify DNS records.
     ```bash
     export NETLIFY_TOKEN=<your token here>
     ```
+1. Add your `netlify.toml` file to teh root directory so we can create proper CNAME redirects for those endpoints
+
 1. Run the tool. The output will contain the names of the `.zone` files that were generated.
     ```bash
     go run .
