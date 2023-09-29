@@ -1,5 +1,7 @@
 # Netlify DNS Zone File Generator
 
+Original repo this was created from: https://github.com/Samyak2/netlify-dns-zone-file
+
 Generate a zone file from your Netlify DNS records.
 
 **Intended use case**: to transfer DNS records from Netlify a platform that supports importing a zone file.
